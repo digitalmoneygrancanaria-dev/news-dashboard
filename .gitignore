@@ -5,3 +5,4 @@ venv/
 ENV/
 .DS_Store
 news_cache.json
+health_cache.json

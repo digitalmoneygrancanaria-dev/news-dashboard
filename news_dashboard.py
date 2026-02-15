@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import streamlit as st
 
 from news_fetcher import get_news, detect_narratives, detect_narratives_with_articles, detect_priority_alerts
+from platform_monitor import get_health_status
 
 # =============================================================================
 # PAGE CONFIG
@@ -97,6 +98,7 @@ with st.sidebar:
 # =============================================================================
 
 items, source_status = get_news(force_refresh=force_refresh)
+health = get_health_status(force_refresh=force_refresh)
 
 # =============================================================================
 # SOURCE STATUS (rendered in sidebar after data loads)
@@ -133,6 +135,52 @@ with st.sidebar:
                 unsafe_allow_html=True,
             )
 
+# -------------------------------------------------------------------------
+# Platform Health (sidebar)
+# -------------------------------------------------------------------------
+
+with st.sidebar:
+    st.divider()
+    st.subheader("Platform Health")
+
+    _status_color = {"UP": "#2ea043", "SLOW": "#d29922", "DEGRADED": "#d29922", "DOWN": "#f85149"}
+
+    for ep in health.get("endpoints", []):
+        color = _status_color.get(ep["status"], "#848d97")
+        latency_str = f'{ep["latency_ms"]}ms' if ep["latency_ms"] is not None else "—"
+        schema_icon = ""
+        if ep["schema_ok"] is False:
+            schema_icon = ' <span style="color:#f85149;" title="Schema drift">&#9888;</span>'
+        st.markdown(
+            f'<div style="padding:2px 0;"><span style="color:{color}; font-size:18px;">&#9679;</span> '
+            f'<b>{ep["name"]}</b> &mdash; {ep["status"]} ({latency_str}){schema_icon}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # SDK info
+    sdk = health.get("sdk_version", {})
+    if sdk.get("latest_version"):
+        pinned = sdk.get("pinned_version", "?")
+        latest = sdk["latest_version"]
+        if sdk.get("is_major_bump"):
+            sdk_color = "#f85149"
+            sdk_label = "Major version bump!"
+        elif sdk.get("is_minor_bump"):
+            sdk_color = "#d29922"
+            sdk_label = "Minor version bump available"
+        elif sdk.get("update_available"):
+            sdk_color = "#848d97"
+            sdk_label = "Patch available"
+        else:
+            sdk_color = "#2ea043"
+            sdk_label = "Up to date"
+        st.markdown(
+            f'<div style="padding:4px 0; font-size:13px;"><b>SDK:</b> py-clob-client<br>'
+            f'&nbsp;&nbsp;Pinned: >={pinned} &rarr; Latest: {latest}<br>'
+            f'&nbsp;&nbsp;<span style="color:{sdk_color};">{sdk_label}</span></div>',
+            unsafe_allow_html=True,
+        )
+
 # Apply platform filter
 if platform_filter == "Polymarket":
     filtered = [i for i in items if i["platform"] in ("polymarket", "both")]
@@ -159,6 +207,146 @@ filtered = filtered[:max_items]
 
 st.title("Prediction Market News & Trends")
 st.caption(f"Articles: {len(filtered)} (of {len(items)} total)")
+
+# =============================================================================
+# PLATFORM HEALTH SECTION (main area)
+# =============================================================================
+
+_overall = health.get("overall_status", "HEALTHY")
+_checked_at = health.get("checked_at", "")
+_banner_colors = {
+    "HEALTHY": ("rgba(46, 160, 67, 0.15)", "#2ea043", "All Systems Healthy"),
+    "WARNING": ("rgba(210, 153, 34, 0.15)", "#d29922", "Warning"),
+    "CRITICAL": ("rgba(248, 81, 73, 0.15)", "#f85149", "Critical"),
+}
+_bg, _fg, _label = _banner_colors.get(_overall, _banner_colors["HEALTHY"])
+
+# Parse relative time for checked_at
+_checked_ago = ""
+if _checked_at:
+    _checked_ago = relative_time(_checked_at)
+
+# Decide if we need the full section (always show banner, detail only when non-healthy or has issues)
+_has_schema_drift = any(ep.get("schema_ok") is False for ep in health.get("endpoints", []))
+_has_fee_values = any(v not in (None, 0) for v in health.get("fee_status", {}).values())
+_sdk = health.get("sdk_version", {})
+_has_sdk_update = _sdk.get("update_available", False)
+_show_detail = _overall != "HEALTHY" or _has_schema_drift or _has_fee_values or _has_sdk_update
+
+st.markdown(
+    f'<div style="background:{_bg}; border-left:4px solid {_fg}; padding:10px 16px; '
+    f'border-radius:4px; margin-bottom:12px;">'
+    f'<span style="color:{_fg}; font-weight:bold; font-size:16px;">{_label}</span>'
+    f'<span style="color:#848d97; float:right; font-size:13px;">Last checked: {_checked_ago}</span>'
+    f'</div>',
+    unsafe_allow_html=True,
+)
+
+if _show_detail:
+    # API Health table
+    _health_rows = ""
+    for ep in health.get("endpoints", []):
+        s_color = {"UP": "#2ea043", "SLOW": "#d29922", "DEGRADED": "#d29922", "DOWN": "#f85149"}.get(ep["status"], "#848d97")
+        latency_str = f'{ep["latency_ms"]}ms' if ep["latency_ms"] is not None else "—"
+        schema_str = '<span style="color:#2ea043;">&#10003;</span>' if ep.get("schema_ok") else (
+            '<span style="color:#f85149;">&#10007;</span>' if ep.get("schema_ok") is False else "—"
+        )
+
+        # Details column
+        details = []
+        if ep["name"] == "CLOB API" and ep.get("field_changes"):
+            fees = ep["field_changes"]
+            parts = [f"{k}={v}" for k, v in fees.items()]
+            details.append(f"Fees: {', '.join(parts)}")
+        if ep["name"] == "Exchange Status" and ep.get("extra_info"):
+            info = ep["extra_info"]
+            trading = "Active" if info.get("trading_active") else "Inactive"
+            details.append(f"Trading: {trading}")
+        if ep.get("error"):
+            details.append(f'<span style="color:#f85149;">{ep["error"]}</span>')
+        details_str = "; ".join(details) if details else ""
+
+        _health_rows += f"""<tr style="border-bottom:1px solid #333;">
+            <td style="padding:6px;">{ep['platform']}</td>
+            <td style="padding:6px;">{ep['name']}</td>
+            <td style="padding:6px;"><span style="color:{s_color}; font-weight:bold;">{ep['status']}</span></td>
+            <td style="padding:6px;">{latency_str}</td>
+            <td style="padding:6px;">{schema_str}</td>
+            <td style="padding:6px; font-size:12px;">{details_str}</td>
+        </tr>"""
+
+    st.markdown(
+        f"""<table style="width:100%; border-collapse:collapse; font-size:14px;">
+        <tr style="border-bottom:2px solid #444; text-align:left;">
+            <th style="padding:8px 6px; width:100px;">Platform</th>
+            <th style="padding:8px 6px; width:140px;">Endpoint</th>
+            <th style="padding:8px 6px; width:80px;">Status</th>
+            <th style="padding:8px 6px; width:80px;">Latency</th>
+            <th style="padding:8px 6px; width:70px;">Schema</th>
+            <th style="padding:8px 6px;">Details</th>
+        </tr>
+        {_health_rows}
+        </table>""",
+        unsafe_allow_html=True,
+    )
+
+    # Schema Drift Alerts
+    _drift_eps = [ep for ep in health.get("endpoints", []) if ep.get("schema_ok") is False]
+    if _drift_eps:
+        for ep in _drift_eps:
+            missing = ", ".join(ep.get("missing_keys", []))
+            st.markdown(
+                f'<div style="background:rgba(248, 81, 73, 0.1); border-left:3px solid #f85149; '
+                f'padding:8px 12px; margin:6px 0; border-radius:3px; font-size:13px;">'
+                f'<b>Schema Drift:</b> {ep["platform"]} {ep["name"]} &mdash; '
+                f'missing fields: <code>{missing}</code></div>',
+                unsafe_allow_html=True,
+            )
+
+    # Fee Monitor
+    _fees = health.get("fee_status", {})
+    if _has_fee_values:
+        fee_parts = [f"<b>{k}</b>: {v}" for k, v in _fees.items()]
+        st.markdown(
+            f'<div style="background:rgba(210, 153, 34, 0.1); border-left:3px solid #d29922; '
+            f'padding:8px 12px; margin:6px 0; border-radius:3px; font-size:13px;">'
+            f'<b>Fee Change Detected:</b> CLOB API &mdash; {", ".join(fee_parts)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    # SDK Version
+    if _has_sdk_update:
+        pinned = _sdk.get("pinned_version", "?")
+        latest = _sdk.get("latest_version", "?")
+        pypi_url = _sdk.get("pypi_url", "")
+        if _sdk.get("is_major_bump"):
+            sdk_bg = "rgba(248, 81, 73, 0.1)"
+            sdk_border = "#f85149"
+            sdk_level = "Major version bump"
+        elif _sdk.get("is_minor_bump"):
+            sdk_bg = "rgba(210, 153, 34, 0.1)"
+            sdk_border = "#d29922"
+            sdk_level = "Minor version bump"
+        else:
+            sdk_bg = "rgba(134, 141, 151, 0.1)"
+            sdk_border = "#848d97"
+            sdk_level = "Patch available"
+
+        gh = health.get("github_releases", {})
+        gh_url = gh.get("latest_release_url", "")
+        links = f'<a href="{pypi_url}" target="_blank" style="color:#58a6ff;">PyPI</a>'
+        if gh_url:
+            links += f' | <a href="{gh_url}" target="_blank" style="color:#58a6ff;">GitHub</a>'
+
+        st.markdown(
+            f'<div style="background:{sdk_bg}; border-left:3px solid {sdk_border}; '
+            f'padding:8px 12px; margin:6px 0; border-radius:3px; font-size:13px;">'
+            f'<b>{sdk_level}:</b> py-clob-client &mdash; '
+            f'pinned >={pinned} &rarr; latest {latest} &mdash; {links}</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
 
 # =============================================================================
 # PRIORITY ALERTS - Platform structural / service changes
