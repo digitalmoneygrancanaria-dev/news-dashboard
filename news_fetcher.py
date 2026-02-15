@@ -334,6 +334,31 @@ def detect_narratives(items: list[dict]) -> pd.DataFrame:
     return df
 
 
+def detect_narratives_with_articles(items: list[dict]) -> dict[str, list[dict]]:
+    """Return a mapping of narrative -> list of matching articles (with link info).
+
+    Each article entry: {title, link, platform, source_name, published}
+    """
+    result = {}  # narrative -> [articles]
+
+    for item in items:
+        text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+
+        for narrative, keywords in NARRATIVE_KEYWORDS.items():
+            if any(kw in text for kw in keywords):
+                if narrative not in result:
+                    result[narrative] = []
+                result[narrative].append({
+                    "title": item["title"],
+                    "link": item["link"],
+                    "platform": item.get("platform", ""),
+                    "source_name": item.get("source_name", ""),
+                    "published": item.get("published", ""),
+                })
+
+    return result
+
+
 def detect_priority_alerts(items: list[dict]) -> list[dict]:
     """Scan articles for platform structural / service / breaking changes.
 
