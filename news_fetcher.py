@@ -49,6 +49,17 @@ GOOGLE_NEWS_QUERIES = [
     },
 ]
 
+PRIORITY_KEYWORDS = {
+    "API Change": ["api change", "api update", "new api", "api v2", "api v3", "deprecat", "endpoint", "breaking change", "migration guide"],
+    "Outage / Downtime": ["outage", "downtime", "incident", "service disruption", "degraded", "maintenance", "status page", "unavailable"],
+    "Regulatory Action": ["cftc order", "sec action", "cease and desist", "enforcement", "fine", "penalty", "banned", "prohibited", "injunction", "lawsuit"],
+    "Fee / Structure Change": ["fee change", "fee structure", "new fees", "commission", "pricing change", "cost change", "withdrawal fee", "deposit fee"],
+    "Platform Update": ["platform update", "new feature", "redesign", "ui change", "app update", "version release", "rollout"],
+    "Market Structure": ["market structure", "order type", "limit order", "market order", "liquidity change", "matching engine", "settlement change", "resolution change"],
+    "Partnership / Integration": ["partnership", "integration", "acquired", "acquisition", "merger", "collaboration", "onboard"],
+    "Security": ["hack", "breach", "exploit", "vulnerability", "security incident", "unauthorized", "compromised", "leaked"],
+}
+
 NARRATIVE_KEYWORDS = {
     "Crypto / Bitcoin": ["crypto", "bitcoin", "btc", "ethereum", "defi"],
     "Arbitrage / Bots": ["arbitrage", "bot", "automated", "algo", "trading"],
@@ -321,3 +332,29 @@ def detect_narratives(items: list[dict]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df = df.sort_values("Total", ascending=False).reset_index(drop=True)
     return df
+
+
+def detect_priority_alerts(items: list[dict]) -> list[dict]:
+    """Scan articles for platform structural / service / breaking changes.
+
+    Returns a list of dicts sorted by recency:
+        {title, link, published, platform, source_name, categories: list[str]}
+
+    Only articles matching at least one PRIORITY_KEYWORDS category are returned.
+    """
+    alerts = []
+    for item in items:
+        text = f"{item.get('title', '')} {item.get('summary', '')}".lower()
+        matched = [cat for cat, kws in PRIORITY_KEYWORDS.items() if any(kw in text for kw in kws)]
+        if matched:
+            alerts.append({
+                "title": item["title"],
+                "link": item["link"],
+                "published": item["published"],
+                "platform": item.get("platform", ""),
+                "source_name": item.get("source_name", ""),
+                "categories": matched,
+            })
+
+    alerts.sort(key=lambda x: x["published"], reverse=True)
+    return alerts

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
-from news_fetcher import get_news, detect_narratives
+from news_fetcher import get_news, detect_narratives, detect_priority_alerts
 
 # =============================================================================
 # PAGE CONFIG
@@ -124,6 +124,49 @@ filtered = filtered[:max_items]
 
 st.title("Prediction Market News & Trends")
 st.caption(f"Articles: {len(filtered)} (of {len(items)} total)")
+
+# =============================================================================
+# PRIORITY ALERTS - Platform structural / service changes
+# =============================================================================
+
+alerts = detect_priority_alerts(items)
+
+if alerts:
+    st.subheader(f"Priority Alerts ({len(alerts)})")
+
+    import pandas as pd
+
+    alert_rows = []
+    for a in alerts:
+        plat = a["platform"]
+        if plat == "polymarket":
+            plat_label = "Polymarket"
+        elif plat == "kalshi":
+            plat_label = "Kalshi"
+        else:
+            plat_label = "Both"
+        alert_rows.append({
+            "Platform": plat_label,
+            "Category": ", ".join(a["categories"]),
+            "Headline": a["title"],
+            "Source": a["source_name"],
+            "When": relative_time(a["published"]),
+        })
+
+    alert_df = pd.DataFrame(alert_rows)
+
+    def highlight_alert_severity(row):
+        """Red for security/outage, orange for regulatory, yellow for others."""
+        cats = row["Category"].lower()
+        if any(k in cats for k in ["security", "outage"]):
+            return ["background-color: rgba(255, 60, 60, 0.2)"] * len(row)
+        if "regulatory" in cats:
+            return ["background-color: rgba(255, 140, 0, 0.2)"] * len(row)
+        return ["background-color: rgba(255, 220, 80, 0.1)"] * len(row)
+
+    styled_alerts = alert_df.style.apply(highlight_alert_severity, axis=1)
+    st.dataframe(styled_alerts, use_container_width=True, hide_index=True)
+    st.divider()
 
 # =============================================================================
 # NARRATIVE TRENDS TABLE
