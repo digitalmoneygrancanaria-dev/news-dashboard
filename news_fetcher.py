@@ -149,33 +149,49 @@ def _parse_feed(url: str, platform: str, source_name: str) -> list[dict]:
     return items
 
 
-def fetch_rss_sources() -> list[dict]:
+def fetch_rss_sources(status: dict) -> list[dict]:
     """Fetch all configured RSS sources (Polymarket Substack)."""
     all_items = []
     for src in RSS_SOURCES:
-        items = _parse_feed(src["url"], src["platform"], src["source_name"])
-        all_items.extend(items)
+        try:
+            items = _parse_feed(src["url"], src["platform"], src["source_name"])
+            all_items.extend(items)
+            status["Polymarket Blog"] = {"active": len(items) > 0, "count": len(items), "error": None}
+        except Exception as e:
+            status["Polymarket Blog"] = {"active": False, "count": 0, "error": str(e)}
     return all_items
 
 
-def fetch_google_news() -> list[dict]:
+def fetch_google_news(status: dict) -> list[dict]:
     """Fetch Google News RSS for each configured query."""
     all_items = []
+    total = 0
+    errors = []
     for q in GOOGLE_NEWS_QUERIES:
         query_encoded = q["query"].replace(" ", "+")
         url = f"https://news.google.com/rss/search?q={query_encoded}&hl=en-US&gl=US&ceid=US:en"
-        items = _parse_feed(url, q["platform"], q["source_name"])
-        all_items.extend(items)
+        try:
+            items = _parse_feed(url, q["platform"], q["source_name"])
+            all_items.extend(items)
+            total += len(items)
+        except Exception as e:
+            errors.append(str(e))
+    status["Google News"] = {
+        "active": total > 0,
+        "count": total,
+        "error": "; ".join(errors) if errors else None,
+    }
     return all_items
 
 
-def fetch_twitter() -> list[dict]:
+def fetch_twitter(status: dict) -> list[dict]:
     """Fetch recent tweets from @Polymarket and @Kalshi via X API v2.
 
     Gracefully returns empty list if TWITTER_BEARER_TOKEN is not set.
     """
     bearer_token = os.environ.get("TWITTER_BEARER_TOKEN")
     if not bearer_token:
+        status["X / Twitter"] = {"active": False, "count": 0, "error": "No TWITTER_BEARER_TOKEN configured"}
         return []
 
     accounts = [
@@ -185,6 +201,7 @@ def fetch_twitter() -> list[dict]:
 
     headers = {"Authorization": f"Bearer {bearer_token}"}
     all_items = []
+    errors = []
 
     for acct in accounts:
         try:
@@ -195,7 +212,7 @@ def fetch_twitter() -> list[dict]:
                 timeout=10,
             )
             if user_resp.status_code != 200:
-                print(f"[news_fetcher] Twitter user lookup failed for {acct['username']}: {user_resp.status_code}")
+                errors.append(f"{acct['username']}: HTTP {user_resp.status_code}")
                 continue
             user_id = user_resp.json()["data"]["id"]
 
@@ -211,7 +228,7 @@ def fetch_twitter() -> list[dict]:
                 timeout=10,
             )
             if tweets_resp.status_code != 200:
-                print(f"[news_fetcher] Twitter tweets fetch failed for {acct['username']}: {tweets_resp.status_code}")
+                errors.append(f"{acct['username']} tweets: HTTP {tweets_resp.status_code}")
                 continue
 
             data = tweets_resp.json().get("data", [])
@@ -232,9 +249,14 @@ def fetch_twitter() -> list[dict]:
                 })
 
         except Exception as e:
-            print(f"[news_fetcher] Twitter error for {acct['username']}: {e}")
+            errors.append(f"{acct['username']}: {e}")
             continue
 
+    status["X / Twitter"] = {
+        "active": len(all_items) > 0,
+        "count": len(all_items),
+        "error": "; ".join(errors) if errors else None,
+    }
     return all_items
 
 
@@ -242,12 +264,17 @@ def fetch_twitter() -> list[dict]:
 # AGGREGATION & CACHING
 # =============================================================================
 
-def fetch_all_news() -> list[dict]:
-    """Merge all sources, deduplicate by id, sort newest first."""
+def fetch_all_news() -> tuple[list[dict], dict]:
+    """Merge all sources, deduplicate by id, sort newest first.
+
+    Returns (items, source_status) where source_status maps source name
+    to {active: bool, count: int, error: str|None}.
+    """
+    status = {}
     all_items = []
-    all_items.extend(fetch_rss_sources())
-    all_items.extend(fetch_google_news())
-    all_items.extend(fetch_twitter())
+    all_items.extend(fetch_rss_sources(status))
+    all_items.extend(fetch_google_news(status))
+    all_items.extend(fetch_twitter(status))
 
     # Deduplicate by id
     seen = set()
@@ -259,32 +286,36 @@ def fetch_all_news() -> list[dict]:
 
     # Sort newest first
     unique.sort(key=lambda x: x["published"], reverse=True)
-    return unique
+    return unique, status
 
 
-def get_news(force_refresh: bool = False) -> list[dict]:
-    """Main entry point - returns news items with JSON file caching (10-min TTL)."""
+def get_news(force_refresh: bool = False) -> tuple[list[dict], dict]:
+    """Main entry point - returns (items, source_status) with JSON file caching (10-min TTL).
+
+    source_status maps each source name to {active, count, error}.
+    """
     if not force_refresh and CACHE_FILE.exists():
         try:
             cache = json.loads(CACHE_FILE.read_text())
             cached_at = cache.get("cached_at", 0)
             if time.time() - cached_at < CACHE_TTL_SECONDS:
-                return cache.get("items", [])
+                return cache.get("items", []), cache.get("source_status", {})
         except (json.JSONDecodeError, KeyError):
             pass
 
-    items = fetch_all_news()
+    items, source_status = fetch_all_news()
 
     # Write cache
     try:
         CACHE_FILE.write_text(json.dumps({
             "cached_at": time.time(),
             "items": items,
+            "source_status": source_status,
         }, indent=2))
     except Exception as e:
         print(f"[news_fetcher] Cache write error: {e}")
 
-    return items
+    return items, source_status
 
 
 # =============================================================================

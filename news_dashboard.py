@@ -96,7 +96,42 @@ with st.sidebar:
 # LOAD DATA
 # =============================================================================
 
-items = get_news(force_refresh=force_refresh)
+items, source_status = get_news(force_refresh=force_refresh)
+
+# =============================================================================
+# SOURCE STATUS (rendered in sidebar after data loads)
+# =============================================================================
+
+with st.sidebar:
+    st.divider()
+    st.subheader("Source Status")
+
+    # Fixed order: always show these three
+    for src_name in ["Polymarket Blog", "Google News", "X / Twitter"]:
+        info = source_status.get(src_name, {})
+        active = info.get("active", False)
+        count = info.get("count", 0)
+        error = info.get("error")
+
+        if active:
+            st.markdown(
+                f'<div style="padding:4px 0;"><span style="color:#2ea043; font-size:18px;">&#9679;</span> '
+                f'<b>{src_name}</b> &mdash; {count} articles</div>',
+                unsafe_allow_html=True,
+            )
+        elif error:
+            st.markdown(
+                f'<div style="padding:4px 0;"><span style="color:#f85149; font-size:18px;">&#9679;</span> '
+                f'<b>{src_name}</b> &mdash; inactive</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption(f"  {error}")
+        else:
+            st.markdown(
+                f'<div style="padding:4px 0;"><span style="color:#848d97; font-size:18px;">&#9679;</span> '
+                f'<b>{src_name}</b> &mdash; 0 articles</div>',
+                unsafe_allow_html=True,
+            )
 
 # Apply platform filter
 if platform_filter == "Polymarket":
