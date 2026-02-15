@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.py[cod]
+venv/
+ENV/
+.DS_Store
+news_cache.json
